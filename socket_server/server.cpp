@@ -15,6 +15,7 @@ void	grace_err_exit(int fd){
 typedef struct poll_fds{
 	struct pollfd	pollfds[MAX_CLIENTS];
 	int		fd_size;
+	std::string	fd_buffers[MAX_CLIENTS];
 }	poll_fds;
 
 int	update_poll_fds(poll_fds *pfds, int fd, short events)
@@ -27,7 +28,11 @@ int	update_poll_fds(poll_fds *pfds, int fd, short events)
 	std::cout << "Poll size: " << pfds->fd_size << std::endl;
 	return 1;
 }
-
+void	send_client_message(poll_fds& pfds, int index, std::string message){
+	int bsent = send(pfds.pollfds[index].fd, message.c_str(), message.size(), 0); 
+	(void)bsent;
+	return ;
+}
 void	handle_server_connection(poll_fds& pfds)
 {
 	int new_fd = accept(pfds.pollfds[0].fd, NULL, NULL);
@@ -42,6 +47,7 @@ void	handle_server_connection(poll_fds& pfds)
 		return ;
 	}
 	// send happy message !!
+	send_client_message(pfds, pfds.fd_size - 1, "Welcome to our IRC server!");
 }
 
 void	handle_poll_event(poll_fds& pfds)
@@ -116,29 +122,5 @@ int	main(void){
 		}
 	}
 
-
-
-
-
-
-
-
-
-
-
-
-
-	int new_fd = -1;
-	struct sockaddr_storage client_addr;
-	socklen_t cs_len = sizeof(client_addr);
-	while (true){
-		new_fd = accept(sockfd, (struct sockaddr *)&client_addr, &cs_len);
-		if (new_fd == -1)
-		{
-			std::cerr << "accept: failed to accept" << std::endl;
-			continue ;
-		}
-		std::cout << "Got an incomming connection.." << std::endl;
-	}
 	return 0;
 }
