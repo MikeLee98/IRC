@@ -1,11 +1,17 @@
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <iostream>
-#include <bits/stdc++.h>
-#include <sys/types.h>
-#include <arpa/inet.h>
+#include <cstring>
+#include <cstdlib>
+#include <cstdio>
+#include <cerrno>
+#include <csignal>
+#include <unistd.h>
 #include <netdb.h>
 #include <poll.h>
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 
 void	grace_err_exit(int fd){
 	close (fd);
@@ -16,6 +22,7 @@ typedef struct poll_fds{
 	struct pollfd	pollfds[MAX_CLIENTS];
 	int		fd_size;
 	std::string	fd_buffers[MAX_CLIENTS];
+	poll_fds() : fd_size(0) { memset(pollfds, 0, sizeof pollfds); }
 }	poll_fds;
 
 int	update_poll_fds(poll_fds *pfds, int fd, short events)
@@ -24,14 +31,25 @@ int	update_poll_fds(poll_fds *pfds, int fd, short events)
 	if (size >= MAX_CLIENTS) return 0;
 	pfds->pollfds[size].fd = fd;
 	pfds->pollfds[size].events = events;
+	pfds->pollfds[size].revents = 0;
 	size++;
 	std::cout << "Poll size: " << pfds->fd_size << std::endl;
 	return 1;
 }
-void	send_client_message(poll_fds& pfds, int index, std::string message){
-	int bsent = send(pfds.pollfds[index].fd, message.c_str(), message.size(), 0); 
-	(void)bsent;
+void	client_buffer_flush(poll_fds& pfds, int index){
+	std::string& tmsg = pfds.fd_buffers[index];
+	size_t bsent = send(pfds.pollfds[index].fd, tmsg.c_str(), tmsg.size(), 0); 
+	if (bsent > 0) tmsg.erase(0, bsent);
+	if (tmsg.empty())
+		pfds.pollfds[index].events &= ~POLLOUT;
+	else 
+		pfds.pollfds[index].events |= POLLOUT;
+	
 	return ;
+}
+void	send_client_message(poll_fds& pfds, int index, const std::string& message){
+	pfds.fd_buffers[index] += message;
+	client_buffer_flush(pfds, index);
 }
 void	handle_server_connection(poll_fds& pfds)
 {
@@ -40,14 +58,24 @@ void	handle_server_connection(poll_fds& pfds)
 		std::cerr << "failed to handle an incomming connection.." << std::endl;
 		return ;
 	}
-	if (update_poll_fds(&pfds, new_fd, POLLIN))
+	if (!update_poll_fds(&pfds, new_fd, POLLIN))
 	{
 		std::cerr << "failed to accept new client: client max limit reached" << std::endl;
 		close (new_fd);
 		return ;
 	}
 	// send happy message !!
-	send_client_message(pfds, pfds.fd_size - 1, "Welcome to our IRC server!");
+	send_client_message(pfds, pfds.fd_size - 1, "Welcome to our IRC server!\n");
+}
+
+void	close_error_socket(poll_fds& pfds, int i){
+	int& fd_size = pfds.fd_size;
+	close(pfds.pollfds[i].fd);
+	pfds.pollfds[i] = pfds.pollfds[fd_size - 1];
+	pfds.fd_buffers[i] = pfds.fd_buffers[fd_size - 1];
+	pfds.fd_buffers[fd_size - 1].clear();
+	fd_size--;
+	return ;
 }
 
 void	handle_poll_event(poll_fds& pfds)
@@ -58,12 +86,21 @@ void	handle_poll_event(poll_fds& pfds)
 		handle_server_connection(pfds);
 	}
 	for (int i = 1; i < size; i++){
-		if (!(pfds.pollfds[i].revents & (POLLIN | POLLHUP))) continue ;
+		if (!pfds.pollfds[i].revents) continue ;
+		if (pfds.pollfds[i].revents & (POLLERR | POLLHUP | POLLNVAL)){
+			close_error_socket(pfds, i);
+			i--;
+			continue ;
+		}
+		if (pfds.pollfds[i].revents & POLLOUT) client_buffer_flush(pfds,i);
+		//if (pfds.pollfds[i].revents & POLLIN) handle_client_input(pfds, i);
+
 		// handle client request
 	}
 }
 
 int	main(void){
+	signal(SIGNUM, action);
 	struct addrinfo	hint;
 	struct addrinfo	*res;
 	memset(&hint, 0, sizeof hint);
@@ -103,7 +140,6 @@ int	main(void){
 		grace_err_exit(sockfd);
 	}
 	poll_fds pfds;
-	memset((void *)(&pfds), 0, sizeof(pfds));
 	if (!update_poll_fds(&pfds, sockfd, POLLIN)){
 		std::cerr << "max fds limit reached! unable to start the server." << std::endl;
 		return 1;
@@ -113,6 +149,11 @@ int	main(void){
 	while (true)
 	{
 		int nevents = poll(pfds.pollfds, pfds.fd_size, 1000);
+		if (nevents == -1){
+			if (errno == EINTR) continue ;
+			perror("poll");
+			exit(1);
+		}
 		if (!nevents){
 			std::cout << "no events found.." << std::endl;
 		}
