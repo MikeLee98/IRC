@@ -46,7 +46,8 @@ void Server::start()
 
 	std::vector <struct pollfd> fds;
 
-	struct pollfd server_poll = {};
+	struct pollfd server_poll;
+	std::memset(&server_poll, 0, sizeof(server_poll));
 	server_poll.fd = _serverFd;
 	server_poll.events = POLLIN;
 	fds.push_back(server_poll);
@@ -59,7 +60,9 @@ void Server::start()
 			std::cerr << "Error: poll error " << std::strerror(errno) << std::endl;
 			break;
 		}
-		for (size_t i = 0; i < fds.size(); i++)
+		size_t size = fds.size();
+		size_t i = 0;
+		while(i < size)
 		{
 			if (i == 0)
 			{
@@ -72,11 +75,13 @@ void Server::start()
 						std::cerr << "Error: accept failed: "<< std::strerror(errno) << std::endl;
 						return;
 					}
-					struct pollfd client_poll = {};
+					struct pollfd client_poll;
+					std::memset(&client_poll, 0, sizeof(client_poll));
 					client_poll.fd = clientFd;
 					client_poll.events = POLLIN;
 					fds.push_back(client_poll);
-				}	
+				}
+				i++;
 			}
 			else
 			{
@@ -87,14 +92,17 @@ void Server::start()
 					if (bytesRead == -1)
 					{
 						std::cerr << "Error: recv failed: "<< std::strerror(errno) << std::endl;
-						return;
+						close(fds[i].fd);
+						fds.erase(fds.begin() + i);
+						size--;
+						continue;
 					}
 					else if (bytesRead == 0)
 					{
 						std::cerr << "Client disconnected "<< std::endl;
 						close(fds[i].fd);
 						fds.erase(fds.begin() + i);
-						i--;
+						size--;
 						continue;
 					}
 					buffer[bytesRead] = '\0';
@@ -113,12 +121,8 @@ void Server::start()
 	else if (serverPoll.revents & POLLNVAL)
 		std::cout << "Error: Not a valid descriptor" << std::endl;*/
 
-	
-	;
 
 	
-	
-	close(clientFd);
 	close(_serverFd);
 	
 }
@@ -128,7 +132,7 @@ int main(int ac, char **av)
 {
 	if(ac != 2)
 		return 1;
-	Server srv(atoi(av[1]));
+	Server srv(std::atoi(av[1]));
 	srv.start();
 	return 0;
 	

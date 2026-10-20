@@ -2,6 +2,7 @@
 #define SERVER_HPP
 
 #include <cstring>
+#include <cstdlib>
 #include <iostream>
 #include <netinet/in.h>
 #include <sys/socket.h>
