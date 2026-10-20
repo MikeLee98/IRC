@@ -107,22 +107,15 @@ void Server::start()
 					}
 					buffer[bytesRead] = '\0';
 					std::cout << "Message from client: " << buffer;
+					i++;
 				}
+				else
+					i++;
 				
 			}
 		}
 	}
-	
-	
-	/*else if (serverPoll.revents & POLLERR)
-		std::cout << "Error: Descriptor error" << std::endl;
-	else if(serverPoll.revents & POLLHUP)
-		std::cout << "Error: Connection terminated or closed" << std::endl;
-	else if (serverPoll.revents & POLLNVAL)
-		std::cout << "Error: Not a valid descriptor" << std::endl;*/
 
-
-	
 	close(_serverFd);
 	
 }
