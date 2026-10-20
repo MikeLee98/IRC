@@ -12,8 +12,7 @@ Server::~Server()
 {
 
 }
-
-void Server::start()
+void Server::create_socket()
 {
 	struct sockaddr_in addr;
 	
@@ -23,7 +22,6 @@ void Server::start()
 		std::cerr << "Error: socket failed: " << std::strerror(errno) << std::endl;
 		return ;
 	}
-
 	std::memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(_port);
@@ -43,6 +41,11 @@ void Server::start()
 		return ;
 	}
 	std::cout << "Server is listening on port " << _port << std::endl;
+}
+
+void Server::start()
+{
+	create_socket();
 
 	std::vector <struct pollfd> fds;
 

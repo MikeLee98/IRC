@@ -19,6 +19,7 @@ class Server
 	public:
 		Server(int port);
 		~Server();
+		void create_socket();
 		void start();
 };
 
