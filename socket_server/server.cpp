@@ -78,11 +78,49 @@ void	close_error_socket(poll_fds& pfds, int i){
 	return ;
 }
 
+void	client_broadcast_output(poll_fds& pfds, int idx, const std::string& buffer){
+	for (int j = 1; j < pfds.fd_size; j++)
+	{
+		if (idx == j) continue ;
+		if (send(pfds.pollfds[j].fd, buffer.c_str(), buffer.size(), 0) == -1) perror("send failure");
+	}
+	return ;
+}
+
+int	handle_client_command(poll_fds& pfds, int index, const std::string& buffer)
+{
+	(void) pfds;
+	(void) index;
+	(void) buffer;
+	return 0;
+}
+
+void	handle_client_input(poll_fds& pfds, int i)
+{
+	char buffer[256];
+	memset(buffer, 0, sizeof(buffer));
+	int bread = recv(pfds.pollfds[i].fd, buffer, sizeof(buffer), 0);
+	if (bread <= 0)
+	{
+		if (bread < 0)
+			perror("rec err");
+		else
+			std::cout << "User closed the connection :" << pfds.pollfds[i].fd << std::endl;
+		close_error_socket(pfds, i);
+		return ;
+	}
+	std::cout << ">> MSG: " << buffer << std::endl;
+	if (!handle_client_command(pfds, i, buffer)){
+		client_broadcast_output(pfds, i, buffer);
+	}
+	return ;
+}
+
+
 void	handle_poll_event(poll_fds& pfds)
 {
 	int &size = pfds.fd_size;
 	if (pfds.pollfds[0].revents & POLLIN){
-		// handle server connection
 		handle_server_connection(pfds);
 	}
 	for (int i = 1; i < size; i++){
@@ -93,14 +131,14 @@ void	handle_poll_event(poll_fds& pfds)
 			continue ;
 		}
 		if (pfds.pollfds[i].revents & POLLOUT) client_buffer_flush(pfds,i);
-		//if (pfds.pollfds[i].revents & POLLIN) handle_client_input(pfds, i);
+		if (pfds.pollfds[i].revents & POLLIN) handle_client_input(pfds, i);
 
 		// handle client request
 	}
 }
 
 int	main(void){
-	signal(SIGNUM, action);
+	//signal(SIGNUM, action);
 	struct addrinfo	hint;
 	struct addrinfo	*res;
 	memset(&hint, 0, sizeof hint);
@@ -114,6 +152,7 @@ int	main(void){
 	}
 	struct addrinfo *temp = res;
 	int sockfd = -1;
+	int yes = 1;
 	while (temp){
 		sockfd = socket(temp->ai_family, temp->ai_socktype, temp->ai_protocol);
 		if (sockfd == -1){
@@ -121,6 +160,8 @@ int	main(void){
 			temp = temp->ai_next;
 			continue ;
 		}
+		setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes,
+                sizeof(int));
 		if (bind(sockfd, temp->ai_addr, temp->ai_addrlen) == -1){
 			std::cerr << "bind: error" << std::endl;
 			temp = temp->ai_next;
@@ -154,10 +195,7 @@ int	main(void){
 			perror("poll");
 			exit(1);
 		}
-		if (!nevents){
-			std::cout << "no events found.." << std::endl;
-		}
-		else {
+		if (nevents){
 			std::cout << "[~] event found" << std::endl;
 			handle_poll_event(pfds);
 		}
