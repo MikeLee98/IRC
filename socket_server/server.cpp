@@ -7,11 +7,16 @@
 #include <unistd.h>
 #include <netdb.h>
 #include <poll.h>
+#include <vector>
+#include <map>
 
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include "Clients.hpp"
+
+std::map<int, Client> clients;
 
 void	grace_err_exit(int fd){
 	close (fd);
@@ -19,24 +24,21 @@ void	grace_err_exit(int fd){
 }
 #define MAX_CLIENTS 1024
 typedef struct poll_fds{
-	struct pollfd	pollfds[MAX_CLIENTS];
-	int		fd_size;
+	std::vector<pollfd> pollfds;
 	std::string	fd_buffers[MAX_CLIENTS];
-	poll_fds() : fd_size(0) { memset(pollfds, 0, sizeof pollfds); }
 }	poll_fds;
 
 int	update_poll_fds(poll_fds *pfds, int fd, short events)
 {
-	int& size = pfds->fd_size;
-	if (size >= MAX_CLIENTS) return 0;
-	pfds->pollfds[size].fd = fd;
-	pfds->pollfds[size].events = events;
-	pfds->pollfds[size].revents = 0;
-	size++;
-	std::cout << "Poll size: " << pfds->fd_size << std::endl;
+	pollfd p;
+	p.fd = fd;
+	p.events = events;
+	p.revents = 0;
+	clients[fd] = Client();
+	pfds->pollfds.push_back(p);
 	return 1;
 }
-void	client_buffer_flush(poll_fds& pfds, int index){
+void	client_buffer_flush(poll_fds& pfds, long unsigned int index){
 	std::string& tmsg = pfds.fd_buffers[index];
 	size_t bsent = send(pfds.pollfds[index].fd, tmsg.c_str(), tmsg.size(), 0); 
 	if (bsent > 0) tmsg.erase(0, bsent);
@@ -44,7 +46,6 @@ void	client_buffer_flush(poll_fds& pfds, int index){
 		pfds.pollfds[index].events &= ~POLLOUT;
 	else 
 		pfds.pollfds[index].events |= POLLOUT;
-	
 	return ;
 }
 void	send_client_message(poll_fds& pfds, int index, const std::string& message){
@@ -65,23 +66,23 @@ void	handle_server_connection(poll_fds& pfds)
 		return ;
 	}
 	// send happy message !!
-	send_client_message(pfds, pfds.fd_size - 1, "Welcome to our IRC server!\n");
+	send_client_message(pfds, pfds.pollfds.size() - 1, "Welcome to our IRC server!\n");
 }
 
-void	close_error_socket(poll_fds& pfds, int i){
-	int& fd_size = pfds.fd_size;
+void	close_error_socket(poll_fds& pfds, long unsigned int i){
+	long unsigned int fd_size = pfds.pollfds.size();
 	close(pfds.pollfds[i].fd);
 	pfds.pollfds[i] = pfds.pollfds[fd_size - 1];
 	pfds.fd_buffers[i] = pfds.fd_buffers[fd_size - 1];
 	pfds.fd_buffers[fd_size - 1].clear();
-	fd_size--;
+	pfds.pollfds.pop_back();
 	return ;
 }
 
 void	client_broadcast_output(poll_fds& pfds, int idx, const std::string& buffer){
-	for (int j = 1; j < pfds.fd_size; j++)
+	for (long unsigned int j = 1; j < pfds.pollfds.size(); j++)
 	{
-		if (idx == j) continue ;
+		if (idx == (int)j) continue ;
 		if (send(pfds.pollfds[j].fd, buffer.c_str(), buffer.size(), 0) == -1) perror("send failure");
 	}
 	return ;
@@ -95,7 +96,7 @@ int	handle_client_command(poll_fds& pfds, int index, const std::string& buffer)
 	return 0;
 }
 
-void	handle_client_input(poll_fds& pfds, int i)
+void	handle_client_input(poll_fds& pfds, long unsigned int i)
 {
 	char buffer[256];
 	memset(buffer, 0, sizeof(buffer));
@@ -109,7 +110,7 @@ void	handle_client_input(poll_fds& pfds, int i)
 		close_error_socket(pfds, i);
 		return ;
 	}
-	std::cout << ">> MSG: " << buffer << std::endl;
+	std::cout << clients[i].name << " sent: " << buffer << std::endl;
 	if (!handle_client_command(pfds, i, buffer)){
 		client_broadcast_output(pfds, i, buffer);
 	}
@@ -119,11 +120,10 @@ void	handle_client_input(poll_fds& pfds, int i)
 
 void	handle_poll_event(poll_fds& pfds)
 {
-	int &size = pfds.fd_size;
 	if (pfds.pollfds[0].revents & POLLIN){
 		handle_server_connection(pfds);
 	}
-	for (int i = 1; i < size; i++){
+	for (long unsigned int i = 1; i <  pfds.pollfds.size(); i++){
 		if (!pfds.pollfds[i].revents) continue ;
 		if (pfds.pollfds[i].revents & (POLLERR | POLLHUP | POLLNVAL)){
 			close_error_socket(pfds, i);
@@ -189,14 +189,13 @@ int	main(void){
 
 	while (true)
 	{
-		int nevents = poll(pfds.pollfds, pfds.fd_size, 1000);
+		int nevents = poll(&(pfds.pollfds[0]), pfds.pollfds.size(), 1000);
 		if (nevents == -1){
 			if (errno == EINTR) continue ;
 			perror("poll");
 			exit(1);
 		}
 		if (nevents){
-			std::cout << "[~] event found" << std::endl;
 			handle_poll_event(pfds);
 		}
 	}

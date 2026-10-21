@@ -1,6 +1,6 @@
 CXX = c++
 CXXFLAGS = -Wall -Werror -Wextra -std=c++98
-SRC = server.cpp 
+SRC = server.cpp Clients.cpp
 O = obj/
 OBJ = ${SRC:%.cpp=${O}%.o}
 DEP = ${OBJ:.o=.d}
