@@ -2,6 +2,7 @@
 #include <ctime>
 #include <iostream>
 #include <sstream>
+#include "server.hpp"
 
 class Client {
 	private:
@@ -12,4 +13,6 @@ class Client {
 		const Client& operator=(const Client&);
 		std::string	name;
 		bool		registered;		
+		std::string	buffer_out; // being sent 
+		std::string	buffer_in; // being recieved
 };

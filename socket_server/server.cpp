@@ -1,94 +1,115 @@
-#include <iostream>
-#include <cstring>
-#include <cstdlib>
-#include <cstdio>
-#include <cerrno>
-#include <csignal>
-#include <unistd.h>
-#include <netdb.h>
-#include <poll.h>
-#include <vector>
-#include <map>
-
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include "Clients.hpp"
+#include "server.hpp"
 
 std::map<int, Client> clients;
+std::vector<pollfd>	pollfds;
+
 
 void	grace_err_exit(int fd){
 	close (fd);
 	exit(1);
 }
-#define MAX_CLIENTS 1024
-typedef struct poll_fds{
-	std::vector<pollfd> pollfds;
-	std::string	fd_buffers[MAX_CLIENTS];
-}	poll_fds;
 
-int	update_poll_fds(poll_fds *pfds, int fd, short events)
+int	update_poll_fds(std::vector<pollfd>& pfds, int fd, short events)
 {
 	pollfd p;
 	p.fd = fd;
 	p.events = events;
 	p.revents = 0;
 	clients[fd] = Client();
-	pfds->pollfds.push_back(p);
+	pfds.push_back(p);
 	return 1;
 }
-void	client_buffer_flush(poll_fds& pfds, long unsigned int index){
-	std::string& tmsg = pfds.fd_buffers[index];
-	size_t bsent = send(pfds.pollfds[index].fd, tmsg.c_str(), tmsg.size(), 0); 
-	if (bsent > 0) tmsg.erase(0, bsent);
-	if (tmsg.empty())
-		pfds.pollfds[index].events &= ~POLLOUT;
-	else 
-		pfds.pollfds[index].events |= POLLOUT;
+
+enum BUFFER_TYPE {
+	BUFFERIN,
+	BUFFEROUT
+};
+
+void	close_error_socket(std::vector<pollfd>& pfds, long unsigned int i){
+	long unsigned int fd_size = pfds.size();
+	clients.erase(pfds[i].fd);
+	close(pfds[i].fd);
+	pfds[i] = pfds[fd_size - 1];
+	pfds.pop_back();
 	return ;
 }
-void	send_client_message(poll_fds& pfds, int index, const std::string& message){
-	pfds.fd_buffers[index] += message;
+
+static int	append_client_buffer(std::vector<pollfd>& pfds, long unsigned int index, const std::string& message, BUFFER_TYPE btype)
+{
+	int fd = pfds[index].fd;
+	std::map<int, Client>::iterator it = clients.find(fd);	
+	if (it == clients.end()) // means that it doesn't exist in the clients map!
+	{
+		close_error_socket(pfds, index);
+		std::cerr << "Dropping Client FD: " << fd << ": doesnt exists in clients" << std::endl;
+		return 0;
+	}
+	Client& c = clients[fd];
+	if (btype == BUFFERIN)
+		c.buffer_in += message;
+	else
+		c.buffer_out += message;
+	return 1;
+}
+static int	get_buffer_out(std::string **msg_addr, std::vector<pollfd>& pfds, int index)
+{
+	int fd = pfds[index].fd;
+	std::map<int, Client>::iterator it = clients.find(fd);	
+	if (it == clients.end()) // means that it doesn't exist in the clients map!
+	{
+		close_error_socket(pfds, index);
+		std::cerr << "Dropping Client FD: " << fd << ": doesnt exists in clients" << std::endl;
+		return 0;
+	}
+	Client& c = clients[fd];
+	*msg_addr = &(c.buffer_out);
+	return 1;
+}
+
+void	client_buffer_flush(std::vector<pollfd>& pfds, long unsigned int index){
+	std::string *msg_addr = NULL;
+	if (!get_buffer_out(&msg_addr, pfds, index)) return ;
+	std::string& tmsg = *msg_addr;
+	size_t bsent = send(pfds[index].fd, tmsg.c_str(), tmsg.size(), 0); 
+	if (bsent > 0) tmsg.erase(0, bsent);
+	if (tmsg.empty())
+		pfds[index].events &= ~POLLOUT;
+	else 
+		pfds[index].events |= POLLOUT;
+	return ;
+}
+void	send_client_message(std::vector<pollfd>& pfds, int index, const std::string& message){
+
+	if (!append_client_buffer(pfds, index, message, BUFFEROUT)) return ;
 	client_buffer_flush(pfds, index);
 }
-void	handle_server_connection(poll_fds& pfds)
+void	handle_server_connection(std::vector<pollfd>& pfds)
 {
-	int new_fd = accept(pfds.pollfds[0].fd, NULL, NULL);
+	int new_fd = accept(pfds[0].fd, NULL, NULL);
 	if (new_fd == -1){
 		std::cerr << "failed to handle an incomming connection.." << std::endl;
 		return ;
 	}
-	if (!update_poll_fds(&pfds, new_fd, POLLIN))
+	if (!update_poll_fds(pfds, new_fd, POLLIN))
 	{
 		std::cerr << "failed to accept new client: client max limit reached" << std::endl;
 		close (new_fd);
 		return ;
 	}
 	// send happy message !!
-	send_client_message(pfds, pfds.pollfds.size() - 1, "Welcome to our IRC server!\n");
+	send_client_message(pfds, pfds.size() - 1, "Welcome to our IRC server!\n");
 }
 
-void	close_error_socket(poll_fds& pfds, long unsigned int i){
-	long unsigned int fd_size = pfds.pollfds.size();
-	close(pfds.pollfds[i].fd);
-	pfds.pollfds[i] = pfds.pollfds[fd_size - 1];
-	pfds.fd_buffers[i] = pfds.fd_buffers[fd_size - 1];
-	pfds.fd_buffers[fd_size - 1].clear();
-	pfds.pollfds.pop_back();
-	return ;
-}
-
-void	client_broadcast_output(poll_fds& pfds, int idx, const std::string& buffer){
-	for (long unsigned int j = 1; j < pfds.pollfds.size(); j++)
+void	client_broadcast_output(std::vector<pollfd>& pfds, int idx, const std::string& buffer){
+	for (long unsigned int j = 1; j < pfds.size(); j++)
 	{
 		if (idx == (int)j) continue ;
-		if (send(pfds.pollfds[j].fd, buffer.c_str(), buffer.size(), 0) == -1) perror("send failure");
+		if (send(pfds[j].fd, buffer.c_str(), buffer.size(), 0) == -1) perror("send failure");
 	}
 	return ;
 }
 
-int	handle_client_command(poll_fds& pfds, int index, const std::string& buffer)
+int	handle_client_command(std::vector<pollfd>& pfds, int index, const std::string& buffer)
 {
 	(void) pfds;
 	(void) index;
@@ -96,21 +117,22 @@ int	handle_client_command(poll_fds& pfds, int index, const std::string& buffer)
 	return 0;
 }
 
-void	handle_client_input(poll_fds& pfds, long unsigned int i)
+void	handle_client_input(std::vector<pollfd> &pfds, long unsigned int i)
 {
 	char buffer[256];
 	memset(buffer, 0, sizeof(buffer));
-	int bread = recv(pfds.pollfds[i].fd, buffer, sizeof(buffer), 0);
+	int bread = recv(pfds[i].fd, buffer, sizeof(buffer), 0);
+	buffer[bread - 1]= 0;
 	if (bread <= 0)
 	{
 		if (bread < 0)
 			perror("rec err");
 		else
-			std::cout << "User closed the connection :" << pfds.pollfds[i].fd << std::endl;
+			std::cout << "User closed the connection :" << pfds[i].fd << std::endl;
 		close_error_socket(pfds, i);
 		return ;
 	}
-	std::cout << clients[i].name << " sent: " << buffer << std::endl;
+	std::cout << clients[i].name << " sent: " << buffer << "[" << strlen(buffer) << "]" << std::endl;
 	if (!handle_client_command(pfds, i, buffer)){
 		client_broadcast_output(pfds, i, buffer);
 	}
@@ -118,20 +140,20 @@ void	handle_client_input(poll_fds& pfds, long unsigned int i)
 }
 
 
-void	handle_poll_event(poll_fds& pfds)
+void	handle_poll_event(std::vector<pollfd>& pfds)
 {
-	if (pfds.pollfds[0].revents & POLLIN){
+	if (pfds[0].revents & POLLIN){
 		handle_server_connection(pfds);
 	}
-	for (long unsigned int i = 1; i <  pfds.pollfds.size(); i++){
-		if (!pfds.pollfds[i].revents) continue ;
-		if (pfds.pollfds[i].revents & (POLLERR | POLLHUP | POLLNVAL)){
+	for (long unsigned int i = 1; i <  pfds.size(); i++){
+		if (!pfds[i].revents) continue ;
+		if (pfds[i].revents & (POLLERR | POLLHUP | POLLNVAL)){
 			close_error_socket(pfds, i);
 			i--;
 			continue ;
 		}
-		if (pfds.pollfds[i].revents & POLLOUT) client_buffer_flush(pfds,i);
-		if (pfds.pollfds[i].revents & POLLIN) handle_client_input(pfds, i);
+		if (pfds[i].revents & POLLOUT) client_buffer_flush(pfds,i);
+		if (pfds[i].revents & POLLIN) handle_client_input(pfds, i);
 
 		// handle client request
 	}
@@ -180,8 +202,8 @@ int	main(void){
 		std::cerr << "listen: error" << std::endl; 
 		grace_err_exit(sockfd);
 	}
-	poll_fds pfds;
-	if (!update_poll_fds(&pfds, sockfd, POLLIN)){
+	std::vector<pollfd> pfds;
+	if (!update_poll_fds(pfds, sockfd, POLLIN)){
 		std::cerr << "max fds limit reached! unable to start the server." << std::endl;
 		return 1;
 	}
@@ -189,7 +211,7 @@ int	main(void){
 
 	while (true)
 	{
-		int nevents = poll(&(pfds.pollfds[0]), pfds.pollfds.size(), 1000);
+		int nevents = poll(&(pfds[0]), pfds.size(), 1000);
 		if (nevents == -1){
 			if (errno == EINTR) continue ;
 			perror("poll");
