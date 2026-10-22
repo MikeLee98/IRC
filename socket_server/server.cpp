@@ -122,6 +122,7 @@ static int	is_buffer_executable(std::vector<pollfd>& pfds, long unsigned index)
 	int fd = get_fd_client_check(pfds, index);
 	if (fd == -1) return 0;
 	std::string& bufferin = clients[fd].buffer_in;
+	(void)bufferin; // silence error
 	// todo - first \r\n or \n means one full block of buffer - ready for execution.
 	return 1;
 }
