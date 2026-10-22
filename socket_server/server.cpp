@@ -33,8 +33,7 @@ void	close_error_socket(std::vector<pollfd>& pfds, long unsigned int i){
 	pfds.pop_back();
 	return ;
 }
-
-static int	append_client_buffer(std::vector<pollfd>& pfds, long unsigned int index, const std::string& message, BUFFER_TYPE btype)
+int	get_fd_client_check(std::vector<pollfd>& pfds, long unsigned index)
 {
 	int fd = pfds[index].fd;
 	std::map<int, Client>::iterator it = clients.find(fd);	
@@ -42,8 +41,15 @@ static int	append_client_buffer(std::vector<pollfd>& pfds, long unsigned int ind
 	{
 		close_error_socket(pfds, index);
 		std::cerr << "Dropping Client FD: " << fd << ": doesnt exists in clients" << std::endl;
-		return 0;
+		return -1;
 	}
+	return (fd);
+}
+
+static int	append_client_buffer(std::vector<pollfd>& pfds, long unsigned int index, const std::string& message, BUFFER_TYPE btype)
+{
+	int fd = get_fd_client_check(pfds, index);
+	if (fd == -1) return 0;
 	Client& c = clients[fd];
 	if (btype == BUFFERIN)
 		c.buffer_in += message;
@@ -53,14 +59,8 @@ static int	append_client_buffer(std::vector<pollfd>& pfds, long unsigned int ind
 }
 static int	get_buffer_out(std::string **msg_addr, std::vector<pollfd>& pfds, int index)
 {
-	int fd = pfds[index].fd;
-	std::map<int, Client>::iterator it = clients.find(fd);	
-	if (it == clients.end()) // means that it doesn't exist in the clients map!
-	{
-		close_error_socket(pfds, index);
-		std::cerr << "Dropping Client FD: " << fd << ": doesnt exists in clients" << std::endl;
-		return 0;
-	}
+	int fd = get_fd_client_check(pfds, index);
+	if (fd == -1) return 0;
 	Client& c = clients[fd];
 	*msg_addr = &(c.buffer_out);
 	return 1;
@@ -117,6 +117,15 @@ int	handle_client_command(std::vector<pollfd>& pfds, int index, const std::strin
 	return 0;
 }
 
+static int	is_buffer_executable(std::vector<pollfd>& pfds, long unsigned index)
+{
+	int fd = get_fd_client_check(pfds, index);
+	if (fd == -1) return 0;
+	std::string& bufferin = clients[fd].buffer_in;
+	// todo - first \r\n or \n means one full block of buffer - ready for execution.
+	return 1;
+}
+
 void	handle_client_input(std::vector<pollfd> &pfds, long unsigned int i)
 {
 	char buffer[256];
@@ -133,7 +142,10 @@ void	handle_client_input(std::vector<pollfd> &pfds, long unsigned int i)
 		return ;
 	}
 	std::cout << clients[i].name << " sent: " << buffer << "[" << strlen(buffer) << "]" << std::endl;
-	if (!handle_client_command(pfds, i, buffer)){
+	if (!append_client_buffer(pfds, i, buffer, BUFFERIN)) return ;
+	if (is_buffer_executable(pfds, i))
+	{
+	       	if (handle_client_command(pfds, i, buffer)) return ;
 		client_broadcast_output(pfds, i, buffer);
 	}
 	return ;
