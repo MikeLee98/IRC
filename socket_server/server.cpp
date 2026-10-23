@@ -100,31 +100,41 @@ void	handle_server_connection(std::vector<pollfd>& pfds)
 	send_client_message(pfds, pfds.size() - 1, "Welcome to our IRC server!\n");
 }
 
-void	client_broadcast_output(std::vector<pollfd>& pfds, int idx, const std::string& buffer){
+std::string	extract_complete_buffer(std::string& buffer)
+{
+	std::string output;
+	size_t idx = buffer.find("\n");
+	int has_r = (idx && buffer[idx - 1] == '\r');
+	output = buffer.substr(0, idx - has_r);
+	buffer.erase(0, idx + 1);
+	return output;
+}
+
+void	client_broadcast_output(std::vector<pollfd>& pfds, int idx, std::string msg){
+	std::cout << clients[pfds[idx].fd].name << " sent: " << msg << std::endl;
+	msg += "\r\n";
 	for (long unsigned int j = 1; j < pfds.size(); j++)
 	{
 		if (idx == (int)j) continue ;
-		if (send(pfds[j].fd, buffer.c_str(), buffer.size(), 0) == -1) perror("send failure");
+		if (!append_client_buffer(pfds, j, msg, BUFFEROUT)){
+			j--;
+			continue ;
+		}
+		client_buffer_flush(pfds, j);
 	}
 	return ;
 }
 
-int	handle_client_command(std::vector<pollfd>& pfds, int index, const std::string& buffer)
+int	handle_client_command(std::vector<pollfd>& pfds, int index, const std::string buffer)
 {
-	(void) pfds;
-	(void) index;
-	(void) buffer;
+	(void)pfds;
+	(void)index;
+	(void)buffer;
 	return 0;
 }
-
-static int	is_buffer_executable(std::vector<pollfd>& pfds, long unsigned index)
+static bool	is_buffer_complete(std::string bufferin)
 {
-	int fd = get_fd_client_check(pfds, index);
-	if (fd == -1) return 0;
-	std::string& bufferin = clients[fd].buffer_in;
-	(void)bufferin; // silence error
-	// todo - first \r\n or \n means one full block of buffer - ready for execution.
-	return 1;
+	return (bufferin.find("\n") != std::string::npos);
 }
 
 void	handle_client_input(std::vector<pollfd> &pfds, long unsigned int i)
@@ -132,7 +142,6 @@ void	handle_client_input(std::vector<pollfd> &pfds, long unsigned int i)
 	char buffer[256];
 	memset(buffer, 0, sizeof(buffer));
 	int bread = recv(pfds[i].fd, buffer, sizeof(buffer), 0);
-	buffer[bread - 1]= 0;
 	if (bread <= 0)
 	{
 		if (bread < 0)
@@ -142,12 +151,17 @@ void	handle_client_input(std::vector<pollfd> &pfds, long unsigned int i)
 		close_error_socket(pfds, i);
 		return ;
 	}
-	std::cout << clients[i].name << " sent: " << buffer << "[" << strlen(buffer) << "]" << std::endl;
+	buffer[bread] = 0;
 	if (!append_client_buffer(pfds, i, buffer, BUFFERIN)) return ;
-	if (is_buffer_executable(pfds, i))
+	int fd = -1;
+	if (is_buffer_complete(clients[pfds[i].fd].buffer_in))
 	{
-	       	if (handle_client_command(pfds, i, buffer)) return ;
-		client_broadcast_output(pfds, i, buffer);
+		fd = get_fd_client_check(pfds, i);
+		if (fd == -1) return ; 
+		std::string complete_buff = extract_complete_buffer(clients[fd].buffer_in);
+		if (complete_buff.empty()) return ; 
+	       	//if (handle_client_command(pfds, i, complete_buff)) return ;
+		client_broadcast_output(pfds, i, complete_buff);
 	}
 	return ;
 }
